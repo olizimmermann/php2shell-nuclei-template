@@ -1,0 +1,141 @@
+id: php2shell-phpinfo-exposure
+
+info:
+  name: php2shell - Chain Exposure via Exposed phpinfo()
+  author: olizimmermann
+  severity: high
+  description: |
+    Locates an exposed phpinfo() page and reads the PHP version, Server API
+    and session settings that decide which php2shell chains apply
+    (CVE-2026-109618 / CVE-2026-109619). Read-only: only GET requests to
+    common phpinfo paths, no multipart bodies, no OOM trigger.
+
+    One result is emitted per matching chain:
+      chain-d-mod-php       Affected version on Apache mod_php (OOM bailout,
+                            no application precondition)
+      chain-e-fpm           Affected version on PHP-FPM with
+                            session.upload_progress enabled (stale BG state)
+      chain-a-preconditions upload_progress On, cleanup Off and
+                            use_strict_mode Off. Still exploitable on patched
+                            PHP if the application has an LFI.
+      affected-version      Affected version on any other SAPI
+
+    Distributions that backport fixes may report an older upstream version
+    while already patched; confirm with the package changelog.
+  reference:
+    - https://github.com/ikow/php2shell-poc
+    - https://github.com/ikow/php2shell-poc/blob/main/docs/ANALYSIS.md
+    - https://github.com/ikow/php2shell-poc/blob/main/docs/PATCH_ANALYSIS.md
+    - https://github.com/php/php-src/commit/3584a98bda
+  classification:
+    cve-id: CVE-2026-109618,CVE-2026-109619
+    cwe-id: CWE-416,CWE-200
+  tags: cve,cve2026,php,php2shell,phpinfo,exposure,config
+  metadata:
+    max-request: 8
+    verified: true
+
+http:
+  - method: GET
+    path:
+      - "{{BaseURL}}/phpinfo.php"
+      - "{{BaseURL}}/info.php"
+      - "{{BaseURL}}/php_info.php"
+      - "{{BaseURL}}/php-info.php"
+      - "{{BaseURL}}/test.php"
+      - "{{BaseURL}}/i.php"
+      - "{{BaseURL}}/pi.php"
+      - "{{BaseURL}}/php.php"
+
+    stop-at-first-match: true
+    max-size: 1048576
+
+    extractors:
+      - type: regex
+        name: php_version
+        part: body
+        group: 1
+        internal: true
+        regex:
+          - 'PHP Version ([0-9]+\.[0-9]+\.[0-9]+)'
+
+      - type: regex
+        name: sapi
+        part: body
+        group: 1
+        internal: true
+        regex:
+          - 'Server API\s*</td><td class="v">([^<]+?)\s*</td>'
+
+      - type: regex
+        name: upload_progress
+        part: body
+        group: 1
+        internal: true
+        regex:
+          - 'session\.upload_progress\.enabled</td><td class="v">([^<]+)</td>'
+
+      - type: regex
+        name: cleanup
+        part: body
+        group: 1
+        internal: true
+        regex:
+          - 'session\.upload_progress\.cleanup</td><td class="v">([^<]+)</td>'
+
+      - type: regex
+        name: strict_mode
+        part: body
+        group: 1
+        internal: true
+        regex:
+          - 'session\.use_strict_mode</td><td class="v">([^<]+)</td>'
+
+      # One extractor per field so a partial phpinfo() (e.g. INFO_GENERAL
+      # only) still reports whatever it does show
+      - type: dsl
+        dsl:
+          - '"php=" + php_version'
+          - '"sapi=" + sapi'
+          - '"upload_progress=" + upload_progress'
+          - '"cleanup=" + cleanup'
+          - '"strict_mode=" + strict_mode'
+
+    matchers-condition: or
+    matchers:
+      - type: dsl
+        name: chain-d-mod-php
+        dsl:
+          - 'contains(body, "phpinfo()")'
+          - 'contains(sapi, "Apache") && contains(sapi, "Handler")'
+          - 'compare_versions(php_version, ">=5.4.0")'
+          - 'compare_versions(php_version, "<8.2.35") || (compare_versions(php_version, ">=8.3.0") && compare_versions(php_version, "<8.3.36")) || (compare_versions(php_version, ">=8.4.0") && compare_versions(php_version, "<8.4.27")) || (compare_versions(php_version, ">=8.5.0") && compare_versions(php_version, "<8.5.12"))'
+        condition: and
+
+      - type: dsl
+        name: chain-e-fpm
+        dsl:
+          - 'contains(body, "phpinfo()")'
+          - 'contains(sapi, "FPM")'
+          - 'upload_progress == "On" || upload_progress == "1"'
+          - 'compare_versions(php_version, ">=5.4.0")'
+          - 'compare_versions(php_version, "<8.2.35") || (compare_versions(php_version, ">=8.3.0") && compare_versions(php_version, "<8.3.36")) || (compare_versions(php_version, ">=8.4.0") && compare_versions(php_version, "<8.4.27")) || (compare_versions(php_version, ">=8.5.0") && compare_versions(php_version, "<8.5.12"))'
+        condition: and
+
+      - type: dsl
+        name: chain-a-preconditions
+        dsl:
+          - 'contains(body, "phpinfo()")'
+          - 'upload_progress == "On" || upload_progress == "1"'
+          - 'cleanup == "Off" || cleanup == "0"'
+          - 'strict_mode == "Off" || strict_mode == "0"'
+        condition: and
+
+      - type: dsl
+        name: affected-version
+        dsl:
+          - 'contains(body, "phpinfo()")'
+          - '!(contains(sapi, "Apache") && contains(sapi, "Handler")) && !contains(sapi, "FPM")'
+          - 'compare_versions(php_version, ">=5.4.0")'
+          - 'compare_versions(php_version, "<8.2.35") || (compare_versions(php_version, ">=8.3.0") && compare_versions(php_version, "<8.3.36")) || (compare_versions(php_version, ">=8.4.0") && compare_versions(php_version, "<8.4.27")) || (compare_versions(php_version, ">=8.5.0") && compare_versions(php_version, "<8.5.12"))'
+        condition: and
